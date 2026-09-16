@@ -1,6 +1,6 @@
 spring:
   application:
-    name: Backend-Intranet
+    name: ${SPRING_APPLICATION_NAME:enterprise-intranet-api}
 
   servlet:
     multipart:
@@ -9,9 +9,9 @@ spring:
       max-request-size: 1GB
 
   datasource:
-    url: jdbc:mysql://localhost:3306/intranet_corporativa?useSSL=false&serverTimezone=UTC&allowPublicKeyRetrieval=true
-    username: TU_USUARIO_MYSQL
-    password: TU_PASSWORD_MYSQL
+    url: ${DATABASE_URL:jdbc:mysql://localhost:3306/intranet_corporativa?useSSL=false&serverTimezone=UTC&allowPublicKeyRetrieval=true}
+    username: ${DATABASE_USERNAME:local_user}
+    password: ${DATABASE_PASSWORD:local_password}
     driver-class-name: com.mysql.cj.jdbc.Driver
     hikari:
       maximum-pool-size: 10
@@ -31,8 +31,8 @@ spring:
 
 app:
   jwt:
-    secret: TU_JWT_SECRET
-    expiration-ms: 86400000
+    secret: ${JWT_SECRET}
+    expiration-ms: ${JWT_EXPIRATION_MS:86400000}
 
 server:
   port: 8081

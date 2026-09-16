@@ -3,3 +3,7 @@ target
 .gitignore
 *.md
 .mvn/wrapper/maven-wrapper.jar
+.env
+.env.*
+!.env.example
+*.log
