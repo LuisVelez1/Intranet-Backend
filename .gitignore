@@ -31,3 +31,16 @@ build/
 
 ### VS Code ###
 .vscode/
+
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+application-local.yml
+application-local.yaml
+application-prod.yml
+application-prod.yaml
+
+# Logs and temporary files
+*.log
+*.tmp
