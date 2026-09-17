@@ -74,7 +74,7 @@ public class ReservationServiceImpl implements ReservationService {
 
         boolean isSuperAdmin = user.getRoles().stream()
                 .anyMatch(role -> role.getName().equals("SUPER_ADMIN"));
-        boolean isOwner = r.getBookedBy().getId().equals(userId);
+        boolean isOwner = r.getBookedBy().getId().equals(user.getId());
 
         if (!isSuperAdmin && !isOwner) {
             throw new AccessDeniedException("No tienes permiso para cancelar esta reserva");
