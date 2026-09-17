@@ -83,6 +83,22 @@ class ReservationServiceImplTest {
     }
 
     @Test
+    void ownerCanCancelOwnReservationWhenIdDiffersFromUsername() {
+        User owner = user("owner-id", "OWNER", "USER");
+        Reservation reservation = Reservation.builder().id("r1").bookedBy(owner)
+                .status("confirmada").build();
+        when(reservationRepository.findById("r1")).thenReturn(Optional.of(reservation));
+        when(userRepository.findByUsername("OWNER")).thenReturn(Optional.of(owner));
+        when(reservationRepository.save(reservation)).thenReturn(reservation);
+
+        ReservationResponse response = service.cancel("r1", "OWNER");
+
+        assertThat(reservation.getStatus()).isEqualTo("cancelada");
+        assertThat(response.getStatus()).isEqualTo("cancelada");
+        verify(reservationRepository).save(reservation);
+    }
+
+    @Test
     void unrelatedRegularUserCannotCancelReservation() {
         User user = user("other-id", "OTHER", "USER");
         Reservation reservation = Reservation.builder().id("r1").bookedBy(user("owner-id", "OWNER", "USER"))
