@@ -31,9 +31,8 @@ spring:
 
 app:
   jwt:
-    secret: ${JWT_SECRET}
+    secret: ${JWT_SECRET:JYkrWwSYof51a12vGCpEVAxyp3qbvisa033G5ySLh3mxL8Ft/jsGKqjtrwRic367PjYVWlVErfz5kxUk9PTLDQ==}
     expiration-ms: ${JWT_EXPIRATION_MS:86400000}
-
 server:
   port: 8081
   servlet:
