@@ -26,4 +26,12 @@ public class AbsenceResponse {
     private LocalDateTime updatedAt;
     private LocalDateTime approvedAt;
     private String approvalComment;
+
+    private String bossDecision;
+    private LocalDateTime bossDecisionAt;
+    private String bossComment;
+
+    private String hrDecision;
+    private LocalDateTime hrDecisionAt;
+    private String hrComment;
 }

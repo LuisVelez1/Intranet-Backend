@@ -19,6 +19,7 @@ import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.LocalTime;
 import java.time.LocalDate;
 import java.util.*;
 
@@ -31,6 +32,7 @@ class AbsenceSecurityIntegrationTest {
     @Autowired AbsenceRequestRepository requests;
     @Autowired AbsenceApproverAssignmentRepository assignments;
     @Autowired AbsenceMailRepository mail;
+    @Autowired AbsenceTypeRepository absenceTypes;
     @Autowired AbsenceService service;
     User employee, approver, outsider;
 
@@ -43,6 +45,12 @@ class AbsenceSecurityIntegrationTest {
         assignment.setEmployee(employee);
         assignment.setApprover(approver);
         assignments.saveAndFlush(assignment);
+
+        var personalType = new AbsenceType();
+        personalType.setName("PERSONAL");
+        personalType.setDescription("Permiso personal de prueba");
+        personalType.setActive(true);
+        absenceTypes.saveAndFlush(personalType);
     }
 
     @AfterEach
@@ -63,19 +71,22 @@ class AbsenceSecurityIntegrationTest {
                         .build());
     }
 
-    private String createRequest() {
-        SecurityContextHolder.getContext()
-                .setAuthentication(
-                        new UsernamePasswordAuthenticationToken(
-                                employee.getUsername(), null, List.of()));
-        var input = new AbsenceCreateRequest();
-        input.setType("PERSONAL");
-        input.setReason("Appointment");
-        input.setStartDate(LocalDate.of(2026, 10, 1));
-        input.setEndDate(input.getStartDate());
-        return service.create(input).getId();
-    }
+private String createRequest() {
+    SecurityContextHolder.getContext()
+            .setAuthentication(
+                    new UsernamePasswordAuthenticationToken(
+                            employee.getUsername(), null, List.of()));
 
+    var input = new AbsenceCreateRequest();
+    input.setType("PERSONAL");
+    input.setReason("Appointment");
+    input.setStartDate(LocalDate.of(2026, 10, 1));
+    input.setEndDate(input.getStartDate());
+    input.setStartTime(LocalTime.of(9, 0));
+    input.setEndTime(LocalTime.of(10, 0));
+
+    return service.create(input).getId();
+}
     @Test
     void blocksAllEndpointsForAnonymousUsers() throws Exception {
         mvc.perform(get("/absences/my")).andExpect(status().isForbidden());
@@ -88,23 +99,34 @@ class AbsenceSecurityIntegrationTest {
                 .andExpect(status().isForbidden());
     }
 
-    @Test
-    void createsPersistsAndPreventsRequesterSpoofing() throws Exception {
-        mvc.perform(
-                        post("/api/absences")
-                                .contextPath("/api")
-                                .with(user(employee.getUsername()))
-                                .contentType("application/json")
-                                .content(
-                                        "{\"type\":\"PERSONAL\",\"startDate\":\"2026-10-01\",\"endDate\":\"2026-10-01\",\"reason\":\"Appointment\",\"requesterId\":\"forged\",\"approverId\":\"forged\"}"))
-                .andExpect(status().isCreated())
-                .andExpect(jsonPath("$.requesterId").value(employee.getId()))
-                .andExpect(jsonPath("$.approverId").value(approver.getId()));
-        assertThat(requests.findByRequester_IdOrderByCreatedAtDesc(employee.getId())).hasSize(1);
-        assertThat(mail.findAll()).hasSize(1);
-        assertThat(mail.findAll().getFirst().getSentAt()).isNull();
-    }
+@Test
+void createsPersistsAndPreventsRequesterSpoofing() throws Exception {
+    mvc.perform(
+                    post("/api/absences")
+                            .contextPath("/api")
+                            .with(user(employee.getUsername()))
+                            .contentType("application/json")
+                            .content(
+                                    "{\"type\":\"PERSONAL\","
+                                            + "\"startDate\":\"2026-10-01\","
+                                            + "\"endDate\":\"2026-10-01\","
+                                            + "\"startTime\":\"09:00\","
+                                            + "\"endTime\":\"10:00\","
+                                            + "\"reason\":\"Appointment\","
+                                            + "\"requesterId\":\"forged\","
+                                            + "\"approverId\":\"forged\"}"))
+            .andExpect(status().isCreated())
+            .andExpect(jsonPath("$.requesterId").value(employee.getId()))
+            .andExpect(jsonPath("$.approverId").value(approver.getId()));
 
+    assertThat(
+                    requests.findByRequester_IdOrderByCreatedAtDesc(
+                            employee.getId()))
+            .hasSize(1);
+
+    assertThat(mail.findAll()).hasSize(1);
+    assertThat(mail.findAll().getFirst().getSentAt()).isNull();
+}
     @Test
     void isolatesPersonalAndPendingLists() throws Exception {
         String id = createRequest();
@@ -134,24 +156,63 @@ class AbsenceSecurityIntegrationTest {
     }
 
     @Test
-    void assignedApproverCanApproveOnlyOnceAndEmployeeReceivesNotification() throws Exception {
+    void assignedApproverCanApproveOnlyOnceAndMovesRequestToHr() throws Exception {
+
         String id = createRequest();
+
         mvc.perform(
                         put("/absences/" + id + "/approve")
                                 .with(user(approver.getUsername()))
                                 .contentType("application/json")
                                 .content("{\"comment\":\"OK\"}"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.status").value("APPROVED"))
-                .andExpect(jsonPath("$.approvedAt").isNotEmpty());
+                .andExpect(
+                        jsonPath("$.status")
+                                .value("PENDING_HR"))
+                .andExpect(
+                        jsonPath("$.bossDecision")
+                                .value("APPROVED"))
+                .andExpect(
+                        jsonPath("$.bossDecisionAt")
+                                .isNotEmpty())
+                .andExpect(
+                        jsonPath("$.bossComment")
+                                .value("OK"))
+                .andExpect(
+                        jsonPath("$.approvedAt")
+                                .doesNotExist());
+
+        /*
+         * El jefe ya tomó su decisión.
+         * No puede decidir nuevamente.
+         */
         mvc.perform(
                         put("/absences/" + id + "/reject")
                                 .with(user(approver.getUsername()))
                                 .contentType("application/json")
                                 .content("{}"))
                 .andExpect(status().isConflict());
-        assertThat(mail.count()).isEqualTo(2);
-        assertThat(mail.findAll()).anyMatch(m -> m.getRecipient().equals(employee.getEmail()));
+
+        var persisted =
+                requests.findById(id).orElseThrow();
+
+        assertThat(persisted.getStatus())
+                .isEqualTo(
+                        AbsenceStatus.PENDING_HR);
+
+        assertThat(persisted.getBossDecision())
+                .isEqualTo("APPROVED");
+
+        assertThat(persisted.getApprovedAt())
+                .isNull();
+
+        /*
+         * En esta prueba no está configurado el correo
+         * de Talento Humano, por lo que permanece solo
+         * la notificación inicial al jefe.
+         */
+        assertThat(mail.count())
+                .isEqualTo(1);
     }
 
     @Test
@@ -170,21 +231,30 @@ class AbsenceSecurityIntegrationTest {
                 .isEmpty();
     }
 
-    @Test
-    void inactiveAssignmentPreventsCreation() throws Exception {
-        var assignment = assignments.findByEmployee_IdAndActiveTrue(employee.getId()).orElseThrow();
-        assignment.setActive(false);
-        assignments.saveAndFlush(assignment);
-        mvc.perform(
-                        post("/absences")
-                                .with(user(employee.getUsername()))
-                                .contentType("application/json")
-                                .content(
-                                        "{\"type\":\"PERSONAL\",\"startDate\":\"2026-10-01\",\"endDate\":\"2026-10-01\",\"reason\":\"Appointment\"}"))
-                .andExpect(status().isBadRequest());
-        assertThat(mail.count()).isZero();
-    }
+@Test
+void inactiveAssignmentPreventsCreation() throws Exception {
+    var assignment =
+            assignments.findByEmployee_IdAndActiveTrue(employee.getId())
+                    .orElseThrow();
 
+    assignment.setActive(false);
+    assignments.saveAndFlush(assignment);
+
+    mvc.perform(
+                    post("/absences")
+                            .with(user(employee.getUsername()))
+                            .contentType("application/json")
+                            .content(
+                                    "{\"type\":\"PERSONAL\","
+                                            + "\"startDate\":\"2026-10-01\","
+                                            + "\"endDate\":\"2026-10-01\","
+                                            + "\"startTime\":\"09:00\","
+                                            + "\"endTime\":\"10:00\","
+                                            + "\"reason\":\"Appointment\"}"))
+            .andExpect(status().isBadRequest());
+
+    assertThat(mail.count()).isZero();
+}
     @Test
     void inactiveUserCannotUseAnExistingAuthenticatedContext() throws Exception {
         employee.setStatus("INACTIVE");

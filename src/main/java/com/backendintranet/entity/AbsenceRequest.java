@@ -71,6 +71,24 @@ public class AbsenceRequest {
     @Column(name = "approval_comment", length = 2000)
     private String approvalComment;
 
+    @Column(name = "boss_decision", length = 20)
+    private String bossDecision;
+
+    @Column(name = "boss_decision_at")
+    private LocalDateTime bossDecisionAt;
+
+    @Column(name = "boss_comment", length = 2000)
+    private String bossComment;
+
+    @Column(name = "hr_decision", length = 20)
+    private String hrDecision;
+
+    @Column(name = "hr_decision_at")
+    private LocalDateTime hrDecisionAt;
+
+    @Column(name = "hr_comment", length = 2000)
+    private String hrComment;
+
     @PrePersist
     void create() {
         if (id == null) id = UUID.randomUUID().toString();

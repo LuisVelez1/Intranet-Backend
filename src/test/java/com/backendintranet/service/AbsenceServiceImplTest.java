@@ -28,19 +28,37 @@ import java.util.*;
 class AbsenceServiceImplTest {
     @Mock AbsenceRequestRepository requests;
     @Mock AbsenceApproverAssignmentRepository assignments;
+    @Mock AbsenceTypeRepository absenceTypes;
     @Mock UserRepository users;
     @Mock AbsenceMailRepository mail;
     AbsenceServiceImpl service;
     ValidatorFactory factory;
-    User employee, approver;
+    User employee, approver, hr;
 
     @BeforeEach
     void setup() {
         factory = Validation.buildDefaultValidatorFactory();
         service =
-                new AbsenceServiceImpl(requests, assignments, users, mail, factory.getValidator());
+                new AbsenceServiceImpl(
+                        requests,
+                        assignments,
+                        absenceTypes,
+                        users,
+                        mail,
+                        factory.getValidator());
         employee = user("employee");
         approver = user("approver");
+
+        hr = user("hr");
+
+        hr.setRoles(
+                new java.util.HashSet<>());
+
+        hr.getRoles().add(
+                com.backendintranet.entity.Role
+                        .builder()
+                        .name("TALENTO_HUMANO")
+                        .build());
     }
 
     @AfterEach
@@ -67,15 +85,16 @@ class AbsenceServiceImplTest {
         when(users.findByUsername(u.getUsername())).thenReturn(Optional.of(u));
     }
 
-    private AbsenceCreateRequest input() {
-        var r = new AbsenceCreateRequest();
-        r.setType("PERSONAL");
-        r.setReason("Personal appointment");
-        r.setStartDate(LocalDate.of(2026, 10, 1));
-        r.setEndDate(LocalDate.of(2026, 10, 1));
-        return r;
-    }
-
+private AbsenceCreateRequest input() {
+    var r = new AbsenceCreateRequest();
+    r.setType("PERSONAL");
+    r.setReason("Personal appointment");
+    r.setStartDate(LocalDate.of(2026, 10, 1));
+    r.setEndDate(LocalDate.of(2026, 10, 1));
+    r.setStartTime(LocalTime.of(9, 0));
+    r.setEndTime(LocalTime.of(10, 0));
+    return r;
+}
     private AbsenceRequest pending() {
         var r = new AbsenceRequest();
         r.setId("request");
@@ -83,6 +102,16 @@ class AbsenceServiceImplTest {
         r.setApprover(approver);
         r.setStatus(AbsenceStatus.PENDING);
         return r;
+    }
+
+    private void allowPersonalType() {
+        var type = new AbsenceType();
+        type.setId(1L);
+        type.setName("PERSONAL");
+        type.setActive(true);
+
+        when(absenceTypes.findByNameIgnoreCaseAndActiveTrue("PERSONAL"))
+                .thenReturn(Optional.of(type));
     }
 
     private void assign() {
@@ -106,6 +135,7 @@ class AbsenceServiceImplTest {
     @Test
     void createsForAuthenticatedEmployeeAndQueuesApproverEmail() {
         login(employee);
+        allowPersonalType();
         assign();
         save();
         var response = service.create(input());
@@ -124,6 +154,7 @@ class AbsenceServiceImplTest {
     @Test
     void rejectsMissingAssignment() {
         login(employee);
+        allowPersonalType();
         when(assignments.findByEmployee_IdAndActiveTrue("employee")).thenReturn(Optional.empty());
         assertThatThrownBy(() -> service.create(input())).isInstanceOf(BadRequestException.class);
         verifyNoInteractions(requests, mail);
@@ -132,6 +163,7 @@ class AbsenceServiceImplTest {
     @Test
     void rejectsInactiveApprover() {
         login(employee);
+        allowPersonalType();
         assign();
         approver.setStatus("INACTIVE");
         assertThatThrownBy(() -> service.create(input())).isInstanceOf(BadRequestException.class);
@@ -141,6 +173,7 @@ class AbsenceServiceImplTest {
     @Test
     void rejectsSelfApprovalAssignment() {
         login(employee);
+        allowPersonalType();
         approver = employee;
         assign();
         assertThatThrownBy(() -> service.create(input())).isInstanceOf(BadRequestException.class);
@@ -170,17 +203,21 @@ class AbsenceServiceImplTest {
         verifyNoInteractions(requests);
     }
 
-    @Test
-    void rejectsPartialTimes() {
-        login(employee);
-        var r = input();
-        r.setStartTime(LocalTime.NOON);
-        assertThatThrownBy(() -> service.create(r)).isInstanceOf(BadRequestException.class);
-    }
+@Test
+void rejectsPartialTimes() {
+    login(employee);
+    var r = input();
+    r.setEndTime(null);
 
+    assertThatThrownBy(() -> service.create(r))
+            .isInstanceOf(BadRequestException.class);
+}
     @Test
     void rejectsEqualTimes() {
-        login(employee);
+ 
+
+
+       login(employee);
         var r = input();
         r.setStartTime(LocalTime.NOON);
         r.setEndTime(LocalTime.NOON);
@@ -199,6 +236,7 @@ class AbsenceServiceImplTest {
     @Test
     void acceptsMinutePrecisionAndOvernightRanges() {
         login(employee);
+        allowPersonalType();
         assign();
         save();
         var r = input();
@@ -226,34 +264,232 @@ class AbsenceServiceImplTest {
     }
 
     @Test
-    void approvesAndQueuesEmployeeEmail() {
+    void bossApprovalMovesRequestToHrReview() {
+
         login(approver);
+
         var r = pending();
-        when(requests.findForDecision("request")).thenReturn(Optional.of(r));
+
+        when(requests.findForDecision("request"))
+                .thenReturn(Optional.of(r));
+
         save();
+
         var d = new AbsenceDecisionRequest();
-        d.setComment(" Approved ");
-        var result = service.approve("request", d);
-        assertThat(result.getStatus()).isEqualTo(AbsenceStatus.APPROVED);
-        assertThat(result.getApprovedAt()).isNotNull();
-        assertThat(result.getApprovalComment()).isEqualTo("Approved");
+        d.setComment(" Approved by boss ");
+
+        var result =
+                service.approve(
+                        "request",
+                        d);
+
+        assertThat(result.getStatus())
+                .isEqualTo(
+                        AbsenceStatus.PENDING_HR);
+
+        assertThat(result.getBossDecision())
+                .isEqualTo("APPROVED");
+
+        assertThat(result.getBossDecisionAt())
+                .isNotNull();
+
+        assertThat(result.getBossComment())
+                .isEqualTo("Approved by boss");
+
+        assertThat(result.getApprovedAt())
+                .isNull();
+
+        assertThat(result.getHrDecision())
+                .isNull();
+    }
+
+    @Test
+    void bossRejectionEndsRequestAndQueuesEmployeeEmail() {
+
+        login(approver);
+
+        var r = pending();
+
+        when(requests.findForDecision("request"))
+                .thenReturn(Optional.of(r));
+
+        save();
+
+        var d = new AbsenceDecisionRequest();
+        d.setComment(" Rejected by boss ");
+
+        var result =
+                service.reject(
+                        "request",
+                        d);
+
+        assertThat(result.getStatus())
+                .isEqualTo(
+                        AbsenceStatus.REJECTED);
+
+        assertThat(result.getBossDecision())
+                .isEqualTo("REJECTED");
+
+        assertThat(result.getBossDecisionAt())
+                .isNotNull();
+
+        assertThat(result.getBossComment())
+                .isEqualTo("Rejected by boss");
+
+        assertThat(result.getApprovedAt())
+                .isNull();
+
         verify(mail)
                 .save(
                         argThat(
                                 m ->
-                                        m.getRecipient().equals("employee@example.test")
-                                                && m.getBody().contains("aprobada")));
+                                        m.getRecipient()
+                                                .equals(
+                                                        "employee@example.test")
+                                                && m.getBody()
+                                                        .contains(
+                                                                "rechazada")));
     }
 
     @Test
-    void rejectsAndQueuesEmployeeEmailWithoutApprovedTimestamp() {
-        login(approver);
-        when(requests.findForDecision("request")).thenReturn(Optional.of(pending()));
+    void hrApprovesAfterBossApproval() {
+
+        login(hr);
+
+        var r = pending();
+
+        r.setStatus(
+                AbsenceStatus.PENDING_HR);
+
+        r.setBossDecision(
+                "APPROVED");
+
+        r.setBossDecisionAt(
+                LocalDateTime.now());
+
+        when(requests.findForDecision("request"))
+                .thenReturn(Optional.of(r));
+
         save();
-        var result = service.reject("request", new AbsenceDecisionRequest());
-        assertThat(result.getStatus()).isEqualTo(AbsenceStatus.REJECTED);
-        assertThat(result.getApprovedAt()).isNull();
-        verify(mail).save(argThat(m -> m.getBody().contains("rechazada")));
+
+        var d = new AbsenceDecisionRequest();
+        d.setComment(" Approved by HR ");
+
+        var result =
+                service.approve(
+                        "request",
+                        d);
+
+        assertThat(result.getStatus())
+                .isEqualTo(
+                        AbsenceStatus.APPROVED);
+
+        assertThat(result.getHrDecision())
+                .isEqualTo("APPROVED");
+
+        assertThat(result.getHrDecisionAt())
+                .isNotNull();
+
+        assertThat(result.getHrComment())
+                .isEqualTo("Approved by HR");
+
+        assertThat(result.getApprovedAt())
+                .isNotNull();
+
+        assertThat(result.getApprovalComment())
+                .isEqualTo("Approved by HR");
+
+        verify(mail)
+                .save(
+                        argThat(
+                                m ->
+                                        m.getRecipient()
+                                                .equals(
+                                                        "employee@example.test")
+                                                && m.getBody()
+                                                        .contains(
+                                                                "aprobada")));
+    }
+
+    @Test
+    void hrRejectsAfterBossApproval() {
+
+        login(hr);
+
+        var r = pending();
+
+        r.setStatus(
+                AbsenceStatus.PENDING_HR);
+
+        r.setBossDecision(
+                "APPROVED");
+
+        r.setBossDecisionAt(
+                LocalDateTime.now());
+
+        when(requests.findForDecision("request"))
+                .thenReturn(Optional.of(r));
+
+        save();
+
+        var d = new AbsenceDecisionRequest();
+        d.setComment(" Rejected by HR ");
+
+        var result =
+                service.reject(
+                        "request",
+                        d);
+
+        assertThat(result.getStatus())
+                .isEqualTo(
+                        AbsenceStatus.REJECTED);
+
+        assertThat(result.getHrDecision())
+                .isEqualTo("REJECTED");
+
+        assertThat(result.getHrDecisionAt())
+                .isNotNull();
+
+        assertThat(result.getHrComment())
+                .isEqualTo("Rejected by HR");
+
+        assertThat(result.getApprovedAt())
+                .isNull();
+
+        verify(mail)
+                .save(
+                        argThat(
+                                m ->
+                                        m.getRecipient()
+                                                .equals(
+                                                        "employee@example.test")
+                                                && m.getBody()
+                                                        .contains(
+                                                                "rechazada")));
+    }
+
+    @Test
+    void hrCannotDecideBeforeBoss() {
+
+        login(hr);
+
+        when(requests.findForDecision("request"))
+                .thenReturn(
+                        Optional.of(
+                                pending()));
+
+        assertThatThrownBy(
+                () ->
+                        service.approve(
+                                "request",
+                                new AbsenceDecisionRequest()))
+                .isInstanceOf(
+                        AccessDeniedException.class);
+
+        verify(requests, never())
+                .saveAndFlush(any());
+
+        verifyNoInteractions(mail);
     }
 
     @Test
