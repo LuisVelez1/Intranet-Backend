@@ -53,3 +53,7 @@ logging:
     com.backendintranet: DEBUG
     org.hibernate.SQL: DEBUG
     org.springframework.security: DEBUG
+
+absence:
+  support:
+    dir: ${ABSENCE_SUPPORT_DIR:/data/absence-supports}
