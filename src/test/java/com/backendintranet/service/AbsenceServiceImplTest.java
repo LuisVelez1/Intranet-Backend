@@ -8,6 +8,7 @@ import com.backendintranet.entity.*;
 import com.backendintranet.exception.*;
 import com.backendintranet.repository.*;
 import com.backendintranet.service.impl.AbsenceServiceImpl;
+import com.backendintranet.service.impl.AbsenceSupportStorage;
 
 import jakarta.validation.*;
 
@@ -31,6 +32,7 @@ class AbsenceServiceImplTest {
     @Mock AbsenceTypeRepository absenceTypes;
     @Mock UserRepository users;
     @Mock AbsenceMailRepository mail;
+    @Mock AbsenceSupportStorage supportStorage;
     AbsenceServiceImpl service;
     ValidatorFactory factory;
     User employee, approver, hr;
@@ -45,7 +47,8 @@ class AbsenceServiceImplTest {
                         absenceTypes,
                         users,
                         mail,
-                        factory.getValidator());
+                        factory.getValidator(),
+                        supportStorage);
         employee = user("employee");
         approver = user("approver");
 

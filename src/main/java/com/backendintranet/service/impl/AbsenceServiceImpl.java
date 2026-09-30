@@ -3,6 +3,7 @@ package com.backendintranet.service.impl;
 import com.backendintranet.dto.request.AbsenceCreateRequest;
 import com.backendintranet.dto.request.AbsenceDecisionRequest;
 import com.backendintranet.dto.response.AbsenceResponse;
+import com.backendintranet.dto.response.AbsenceSupportDownload;
 import com.backendintranet.entity.AbsenceMail;
 import com.backendintranet.entity.AbsenceRequest;
 import com.backendintranet.entity.AbsenceStatus;
@@ -27,6 +28,9 @@ import org.springframework.security.authentication.AnonymousAuthenticationToken;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
+import org.springframework.web.multipart.MultipartFile;
 
 import java.time.LocalDateTime;
 import java.util.List;
@@ -43,6 +47,7 @@ public class AbsenceServiceImpl implements AbsenceService {
     private final UserRepository users;
     private final AbsenceMailRepository mail;
     private final Validator validator;
+    private final AbsenceSupportStorage supportStorage;
 
     @Value("${absence.mail.hr-recipient:}")
     private String hrRecipient;
@@ -162,6 +167,16 @@ public class AbsenceServiceImpl implements AbsenceService {
     public AbsenceResponse create(
             AbsenceCreateRequest input) {
 
+        return create(
+                input,
+                null);
+    }
+
+    @Override
+    public AbsenceResponse create(
+            AbsenceCreateRequest input,
+            MultipartFile support) {
+
         User requester =
                 currentUser();
 
@@ -223,6 +238,19 @@ public class AbsenceServiceImpl implements AbsenceService {
         request.setReason(
                 input.getReason().trim());
 
+        AbsenceSupportStorage.StoredSupport storedSupport =
+                supportStorage.store(
+                        support);
+
+        if (storedSupport != null) {
+
+            request.setSupportFile(
+                    storedSupport.storedName());
+
+            registerSupportRollbackCleanup(
+                    storedSupport.storedName());
+        }
+
         request.setStatus(
                 AbsenceStatus.PENDING);
 
@@ -256,6 +284,93 @@ public class AbsenceServiceImpl implements AbsenceService {
 
         return response(
                 request);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public AbsenceSupportDownload getSupport(
+            String id) {
+
+        User actor =
+                currentUser();
+
+        AbsenceRequest request =
+                requests
+                        .findById(id)
+                        .orElseThrow(
+                                () ->
+                                        new ResourceNotFoundException(
+                                                "Solicitud no encontrada"));
+
+        boolean requester =
+                actor.getId()
+                        .equals(
+                                request
+                                        .getRequester()
+                                        .getId());
+
+        boolean assignedApprover =
+                actor.getId()
+                        .equals(
+                                request
+                                        .getApprover()
+                                        .getId());
+
+        if (!requester
+                && !assignedApprover
+                && !isGlobalAbsenceManager(actor)) {
+
+            throw new AccessDeniedException(
+                    "No tiene permiso para consultar este soporte");
+        }
+
+        String storedName =
+                request.getSupportFile();
+
+        if (storedName == null
+                || storedName.isBlank()) {
+
+            throw new ResourceNotFoundException(
+                    "La solicitud no tiene soporte adjunto");
+        }
+
+        return new AbsenceSupportDownload(
+                supportStorage.load(
+                        storedName),
+                supportStorage.contentType(
+                        storedName),
+                "soporte-ausencia-"
+                        + request.getId()
+                        + "."
+                        + supportStorage.extensionOf(
+                                storedName));
+    }
+
+    private void registerSupportRollbackCleanup(
+            String storedName) {
+
+        if (!TransactionSynchronizationManager
+                .isSynchronizationActive()) {
+
+            return;
+        }
+
+        TransactionSynchronizationManager
+                .registerSynchronization(
+                        new TransactionSynchronization() {
+
+                            @Override
+                            public void afterCompletion(
+                                    int status) {
+
+                                if (status
+                                        != TransactionSynchronization.STATUS_COMMITTED) {
+
+                                    supportStorage.deleteQuietly(
+                                            storedName);
+                                }
+                            }
+                        });
     }
 
     @Override

@@ -14,6 +14,8 @@ import org.junit.jupiter.api.*;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
+import org.springframework.http.MediaType;
+import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.test.web.servlet.MockMvc;
@@ -33,6 +35,7 @@ class AbsenceSecurityIntegrationTest {
     @Autowired AbsenceApproverAssignmentRepository assignments;
     @Autowired AbsenceMailRepository mail;
     @Autowired AbsenceTypeRepository absenceTypes;
+    @Autowired RoleRepository roles;
     @Autowired AbsenceService service;
     User employee, approver, outsider;
 
@@ -87,6 +90,91 @@ private String createRequest() {
 
     return service.create(input).getId();
 }
+    private void grantRole(
+            User user,
+            String roleName) {
+
+        Role role =
+                roles.findByName(roleName)
+                        .orElseGet(
+                                () ->
+                                        roles.saveAndFlush(
+                                                Role.builder()
+                                                        .name(roleName)
+                                                        .build()));
+
+        if (user.getRoles() == null) {
+            user.setRoles(
+                    new HashSet<>());
+        }
+
+        user.getRoles()
+                .add(role);
+
+        users.saveAndFlush(
+                user);
+    }
+
+    private MockMultipartFile pngSupport() {
+
+        byte[] png =
+                new byte[] {
+                    (byte) 0x89,
+                    0x50,
+                    0x4E,
+                    0x47,
+                    0x0D,
+                    0x0A,
+                    0x1A,
+                    0x0A,
+                    0x00
+                };
+
+        return new MockMultipartFile(
+                "file",
+                "soporte.png",
+                "image/png",
+                png);
+    }
+
+    private String createRequestWithSupport() {
+
+        SecurityContextHolder
+                .getContext()
+                .setAuthentication(
+                        new UsernamePasswordAuthenticationToken(
+                                employee.getUsername(),
+                                null,
+                                List.of()));
+
+        var input =
+                new AbsenceCreateRequest();
+
+        input.setType("PERSONAL");
+        input.setReason("Appointment");
+        input.setStartDate(
+                LocalDate.of(
+                        2026,
+                        10,
+                        1));
+        input.setEndDate(
+                input.getStartDate());
+        input.setStartTime(
+                LocalTime.of(
+                        9,
+                        0));
+        input.setEndTime(
+                LocalTime.of(
+                        10,
+                        0));
+
+        return service
+                .create(
+                        input,
+                        pngSupport())
+                .getId();
+    }
+
     @Test
     void blocksAllEndpointsForAnonymousUsers() throws Exception {
         mvc.perform(get("/absences/my")).andExpect(status().isForbidden());
@@ -262,4 +350,192 @@ void inactiveAssignmentPreventsCreation() throws Exception {
         mvc.perform(get("/absences/my").with(user(employee.getUsername())))
                 .andExpect(status().isForbidden());
     }
+    @Test
+    void createsMultipartRequestWithPngSupport()
+            throws Exception {
+
+        var data =
+                new MockMultipartFile(
+                        "data",
+                        "",
+                        MediaType.APPLICATION_JSON_VALUE,
+                        (
+                                "{"
+                                        + "\"type\":\"PERSONAL\","
+                                        + "\"startDate\":\"2026-10-01\","
+                                        + "\"endDate\":\"2026-10-01\","
+                                        + "\"startTime\":\"09:00\","
+                                        + "\"endTime\":\"10:00\","
+                                        + "\"reason\":\"Appointment\""
+                                        + "}")
+                                .getBytes());
+
+        mvc.perform(
+                        multipart("/absences")
+                                .file(data)
+                                .file(
+                                        pngSupport())
+                                .with(
+                                        user(
+                                                employee.getUsername())))
+                .andExpect(
+                        status().isCreated())
+                .andExpect(
+                        jsonPath("$.supportFile")
+                                .isNotEmpty());
+
+        var stored =
+                requests
+                        .findByRequester_IdOrderByCreatedAtDesc(
+                                employee.getId())
+                        .getFirst();
+
+        assertThat(
+                        stored.getSupportFile())
+                .isNotBlank()
+                .endsWith(".png");
+    }
+
+    @Test
+    void requesterCanDownloadOwnSupport()
+            throws Exception {
+
+        String id =
+                createRequestWithSupport();
+
+        mvc.perform(
+                        get(
+                                "/absences/"
+                                        + id
+                                        + "/support")
+                                .with(
+                                        user(
+                                                employee.getUsername())))
+                .andExpect(
+                        status().isOk())
+                .andExpect(
+                        content().contentType(
+                                MediaType.IMAGE_PNG))
+                .andExpect(
+                        header()
+                                .string(
+                                        "Content-Disposition",
+                                        org.hamcrest.Matchers.containsString(
+                                                "attachment")));
+    }
+
+    @Test
+    void assignedApproverCanDownloadSupport()
+            throws Exception {
+
+        String id =
+                createRequestWithSupport();
+
+        mvc.perform(
+                        get(
+                                "/absences/"
+                                        + id
+                                        + "/support")
+                                .with(
+                                        user(
+                                                approver.getUsername())))
+                .andExpect(
+                        status().isOk())
+                .andExpect(
+                        content().contentType(
+                                MediaType.IMAGE_PNG));
+    }
+
+    @Test
+    void unrelatedUserCannotDownloadSupport()
+            throws Exception {
+
+        String id =
+                createRequestWithSupport();
+
+        mvc.perform(
+                        get(
+                                "/absences/"
+                                        + id
+                                        + "/support")
+                                .with(
+                                        user(
+                                                outsider.getUsername())))
+                .andExpect(
+                        status().isForbidden());
+    }
+
+    @Test
+    void requestWithoutSupportReturnsNotFound()
+            throws Exception {
+
+        String id =
+                createRequest();
+
+        mvc.perform(
+                        get(
+                                "/absences/"
+                                        + id
+                                        + "/support")
+                                .with(
+                                        user(
+                                                employee.getUsername())))
+                .andExpect(
+                        status().isNotFound());
+    }
+
+
+    @Test
+    void talentHumanCanDownloadAnyAbsenceSupport()
+            throws Exception {
+
+        String id =
+                createRequestWithSupport();
+
+        grantRole(
+                outsider,
+                "TALENTO_HUMANO");
+
+        mvc.perform(
+                        get(
+                                "/absences/"
+                                        + id
+                                        + "/support")
+                                .with(
+                                        user(
+                                                outsider.getUsername())))
+                .andExpect(
+                        status().isOk())
+                .andExpect(
+                        content().contentType(
+                                MediaType.IMAGE_PNG));
+    }
+
+    @Test
+    void superAdminCanDownloadAnyAbsenceSupport()
+            throws Exception {
+
+        String id =
+                createRequestWithSupport();
+
+        grantRole(
+                outsider,
+                "SUPER_ADMIN");
+
+        mvc.perform(
+                        get(
+                                "/absences/"
+                                        + id
+                                        + "/support")
+                                .with(
+                                        user(
+                                                outsider.getUsername())))
+                .andExpect(
+                        status().isOk())
+                .andExpect(
+                        content().contentType(
+                                MediaType.IMAGE_PNG));
+    }
+
+
 }
