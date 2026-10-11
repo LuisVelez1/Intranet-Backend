@@ -18,6 +18,11 @@ WORKDIR /app
 
 # Run as a non-root user.
 RUN addgroup -S spring && adduser -S spring -G spring
+
+# Private persistent storage for absence support attachments.
+RUN mkdir -p /data/absence-supports \
+    && chown -R spring:spring /data/absence-supports
+
 USER spring
 
 # Copy the generated JAR.

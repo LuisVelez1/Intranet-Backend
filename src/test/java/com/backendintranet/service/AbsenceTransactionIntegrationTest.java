@@ -23,6 +23,7 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
+import java.time.LocalTime;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.*;
@@ -41,6 +42,7 @@ class AbsenceTransactionIntegrationTest {
     @Autowired AbsenceRequestRepository requests;
     @Autowired AbsenceApproverAssignmentRepository assignments;
     @Autowired AbsenceMailRepository mail;
+    @Autowired AbsenceTypeRepository absenceTypes;
     @Autowired PlatformTransactionManager transactionManager;
 
     @MockitoBean(name = "absenceMailSender")
@@ -60,6 +62,12 @@ class AbsenceTransactionIntegrationTest {
                     assignment.setEmployee(employee);
                     assignment.setApprover(approver);
                     assignments.saveAndFlush(assignment);
+
+                    var personalType = new AbsenceType();
+                    personalType.setName("PERSONAL");
+                    personalType.setDescription("Permiso personal de prueba");
+                    personalType.setActive(true);
+                    absenceTypes.saveAndFlush(personalType);
                 });
         login(employee);
     }
@@ -72,6 +80,7 @@ class AbsenceTransactionIntegrationTest {
                     mail.deleteAll();
                     requests.deleteAll();
                     assignments.deleteAll();
+                    absenceTypes.deleteAll();
                     users.delete(employee);
                     users.delete(approver);
                 });
@@ -97,15 +106,16 @@ class AbsenceTransactionIntegrationTest {
                                 user.getUsername(), null, List.of()));
     }
 
-    private AbsenceCreateRequest input() {
-        var input = new AbsenceCreateRequest();
-        input.setType("PERSONAL");
-        input.setReason("Appointment");
-        input.setStartDate(LocalDate.of(2026, 10, 1));
-        input.setEndDate(input.getStartDate());
-        return input;
-    }
-
+private AbsenceCreateRequest input() {
+    var input = new AbsenceCreateRequest();
+    input.setType("PERSONAL");
+    input.setReason("Appointment");
+    input.setStartDate(LocalDate.of(2026, 10, 1));
+    input.setEndDate(input.getStartDate());
+    input.setStartTime(LocalTime.of(9, 0));
+    input.setEndTime(LocalTime.of(10, 0));
+    return input;
+}
     @Test
     void rollbackRemovesBothRequestAndNotification() {
         transaction.executeWithoutResult(
@@ -197,8 +207,22 @@ class AbsenceTransactionIntegrationTest {
             assertThat(List.of(first.get(15, TimeUnit.SECONDS), second.get(15, TimeUnit.SECONDS)))
                     .containsExactlyInAnyOrder("approved", "conflict");
         }
-        assertThat(mail.count()).isEqualTo(4);
-        assertThat(requests.findById(id).orElseThrow().getStatus())
-                .isEqualTo(AbsenceStatus.APPROVED);
+        // Dos correos de creación y una remisión a HR; la decisión concurrente perdedora no encola.
+        assertThat(mail.count()).isEqualTo(3);
+
+        var persisted =
+                requests.findById(id).orElseThrow();
+
+        assertThat(persisted.getStatus())
+                .isEqualTo(AbsenceStatus.PENDING_HR);
+
+        assertThat(persisted.getBossDecision())
+                .isEqualTo("APPROVED");
+
+        assertThat(persisted.getBossDecisionAt())
+                .isNotNull();
+
+        assertThat(persisted.getApprovedAt())
+                .isNull();
     }
 }

@@ -57,3 +57,5 @@ logging:
 absence:
   mail:
     hr-recipient: ${ABSENCE_MAIL_HR_RECIPIENT:talentohumano@licodistribuciones.com}
+  support:
+    dir: ${ABSENCE_SUPPORT_DIR:/data/absence-supports}

@@ -8,5 +8,12 @@ import java.util.Optional;
 
 public interface AbsenceApproverAssignmentRepository
         extends JpaRepository<AbsenceApproverAssignment, Long> {
-    Optional<AbsenceApproverAssignment> findByEmployee_IdAndActiveTrue(String employeeId);
+
+    Optional<AbsenceApproverAssignment>
+            findByEmployee_IdAndActiveTrue(String employeeId);
+
+    Optional<AbsenceApproverAssignment>
+            findByEmployee_Id(String employeeId);
+
+    boolean existsByApprover_IdAndActiveTrue(String approverId);
 }
