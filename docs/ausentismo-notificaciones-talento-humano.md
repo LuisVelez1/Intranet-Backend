@@ -1,67 +1,90 @@
-# Copia de notificaciones de Ausentismo
+# Integración de Ausentismo y notificaciones a Talento Humano
 
-Cada creación, aprobación y rechazo conserva el destinatario original y registra
-una segunda entrada en `absence_mail_outbox` con el mismo asunto y cuerpo.
-Si las direcciones coinciden, ignorando mayúsculas y espacios exteriores, solo
-se registra el correo original. Los reintentos siguen en el dispatcher existente;
-cada entrada tiene su propio contador, próxima fecha de intento y resultado.
-No cambia el esquema ni la lógica de aprobación. No modifica correos ya encolados.
+## Versiones y alcance
 
-## Configuración
+Integración desde main `fedfd735812a0cc3ad771c5b3dbdb0e2b178af94` con
+`feat/ausentismo` en `62fde2445bddb96e6c2190ddbf2364910c6ffe21`.
+El desarrollo se realizó en un worktree local separado de producción.
 
-`ABSENCE_MAIL_HR_RECIPIENT` configura la copia y su valor predeterminado es
-`talentohumano@licodistribuciones.com`. Una configuración vacía también utiliza
-el predeterminado. Se conserva la configuración SMTP actual de `absence.mail`.
-El envío requiere que `absence.mail.enabled` esté habilitado.
+Se conserva la versión avanzada: doble aprobación, rechazo inmediato del jefe,
+aprobación/rechazo final de HR, carga y descarga segura de soportes, almacenamiento
+persistente, tipos de ausencia, asignaciones, roles, permisos y consultas.
+Los controladores, DTO, entidades, repositorios y almacenamiento de soportes son
+los de `62fde24`; la modificación funcional adicional está en el encolado de correo.
+No se modifica Requerimientos ni frontend.
 
-## Despliegue pendiente de autorización
+## Notificaciones
 
-No se encontró `/opt/intranet` en el equipo de desarrollo ni una configuración
-SSH que permita identificar el servidor. El repositorio contiene un Dockerfile,
-pero no contiene Docker Compose ni identifica el servicio de producción.
-Por tanto, no es posible proporcionar todavía comandos de actualización y
-reinicio adaptados al servidor sin inventar nombres.
+| Evento | Destinatario principal | Entradas si principal no es HR |
+| --- | --- | --- |
+| Creación | Jefe asignado | 2: principal y copia HR |
+| Rechazo del jefe | Colaborador | 2: principal y copia HR |
+| Aprobación del jefe / remisión | HR | 1: remisión original |
+| Aprobación final HR | Colaborador | 2: principal y copia HR |
+| Rechazo final HR | Colaborador | 2: principal y copia HR |
 
-Después de aprobar y fusionar el PR, y autorizar expresamente producción:
+Cada copia tiene exactamente el asunto y cuerpo del original. Se compara el
+correo principal sin distinguir mayúsculas ni espacios exteriores. Si coincide
+con HR, solo se crea una entrada. La notificación separada de creación que existía
+en la versión avanzada se sustituye por la copia idéntica, evitando un tercer correo.
+La remisión del jefe conserva su asunto y contenido propios y no agrega copia.
 
-1. En el servidor, ejecutar estas consultas de inventario:
+`ABSENCE_MAIL_HR_RECIPIENT` configura el buzón; su predeterminado es
+`talentohumano@licodistribuciones.com`. Un valor vacío también usa el predeterminado.
+El dispatcher, repositorio y entidad de `absence_mail_outbox` se conservan.
+Cada entrada mantiene sus propios intentos y resultado. Ambas entradas se encolan
+en la transacción de la solicitud; no se cambian correos previamente encolados.
+La configuración SMTP y la condición `absence.mail.enabled=true` permanecen.
 
-   ```bash
-   cd /opt/intranet
-   pwd
-   find . -maxdepth 3 -type f \( -name 'compose*.yml' -o -name 'compose*.yaml' -o -name 'docker-compose*.yml' -o -name 'docker-compose*.yaml' -o -name 'Dockerfile' \) -print
-   docker compose ls
-   docker ps --format 'table {{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}'
-   systemctl list-units --type=service --all --no-pager
-   ```
+## Conflictos resueltos
 
-2. Identificar el backend, su origen de código o imagen, archivo de entorno,
-   mecanismo de despliegue y endpoint de salud. Respaldar los archivos reales de
-   configuración con permisos restringidos y registrar la imagen o revisión
-   anterior para rollback. No imprimir credenciales mediante `docker inspect`,
-   `docker compose config`, archivos de entorno o logs.
-3. Verificar SMTP y agregar `ABSENCE_MAIL_HR_RECIPIENT` a la configuración del
-   backend si se desea sobrescribir el valor predeterminado. Si usa Compose,
-   confirmar que la variable se entrega al contenedor mediante `environment`
-   o `env_file`; definirla en `.env` por sí solo no garantiza su entrega.
-4. Actualizar y recrear únicamente el servicio backend identificado, sin reiniciar
-   dependencias. No ejecutar `docker compose down`, borrar volúmenes ni cambiar
-   MySQL, Nginx, frontend u otros módulos. No se necesita migración de base de datos.
-5. Comprobar el endpoint de salud real y logs del backend. Realizar una prueba
-   SMTP controlada sin crear solicitudes reales, preferiblemente con un entorno
-   aislado y datos sintéticos. Confirmar entrega a ambos buzones y verificar que
-   una falla conserva únicamente el destinatario afectado para reintento.
-6. Si falla la validación, restaurar la imagen y configuración previas del backend
-   conservando la base de datos y la cola.
+- `AbsenceServiceImpl.java`: conservar la implementación avanzada y centralizar la
+  copia en `enqueueEmail`, en lugar de duplicar la notificación HR de creación.
+- `application.yaml`: conservar tanto `absence.support.dir` como `absence.mail.hr-recipient`.
+- Tres archivos de pruebas: conservar las verificaciones de doble aprobación y
+  soportes, actualizar conteos y conservar las pruebas de reintentos del PR #9.
 
-Las pruebas automatizadas usan H2 y un emisor simulado; no envían correos reales.
-La comprobación de entrega SMTP real permanece pendiente del acceso y autorización.
+## Compatibilidad con producción
 
-## Validación del cambio
+El 11 de octubre de 2026 se consultaron exclusivamente metadatos de MySQL 8 en
+`intranet_corporativa`, sin migraciones ni cambios de datos:
 
-`./mvnw test`: 76 pruebas, cero fallos, cero errores y cero omitidas.
-Incluye creación/aprobación/rechazo con copia idéntica, deduplicación de los tres
- eventos, destinatario configurable, rollback de ambas entradas, decisiones
-concurrentes y reintento independiente tras fallas de cualquiera de los buzones.
-La ejecución requirió salir del sandbox para permitir la conexión de Mockito a
-la JVM. `git diff --check` también pasó.
+- `absence_requests` tiene las seis columnas de decisiones de jefe/HR, fechas,
+  comentarios y `support_file`; tipos y nulabilidad corresponden a la versión avanzada.
+- `ck_absence_status` admite `PENDING_HR`; las restricciones de decisiones permiten
+  `APPROVED` y `REJECTED`, o NULL.
+- `absence_types` existe con sus columnas, índice de actividad y unicidad del nombre.
+- `absence_mail_outbox` existe con sus columnas y el índice de pendientes.
+- Existe el rol `TALENTO_HUMANO` y una asignación de ese rol.
+
+Las entidades y scripts SQL avanzados se incorporan sin cambios respecto a `62fde24`.
+Este servidor ya tiene las estructuras necesarias: no se requiere una migración
+adicional para la integración. Los scripts heredados, especialmente
+`absence-double-approval.sql`, no son idempotentes: NO deben ejecutarse de nuevo
+sobre esta base. Otros entornos que partan del main anterior requieren revisión
+individual del esquema antes de adoptar la versión avanzada.
+
+## Producción y siguiente paso
+
+Diagnóstico previo: Compose efectivo `/opt/intranet/docker-compose.yml`, servicio
+`backend`, contenedor `intranet-backend`, contexto `/opt/intranet/Backend-Intranet`.
+SMTP está habilitado; el contenedor no define `ABSENCE_MAIL_HR_RECIPIENT`.
+El código integrado usará el predeterminado. Una sobrescritura futura debe inyectarse
+al backend mediante `environment`; definirla únicamente en `.env` no basta.
+
+No se modifica Compose ni el entorno del servidor en este PR. No se realizan
+reinicios ni despliegues. Tras revisión, merge y autorización expresa, preparar
+respaldo restringido de configuración, conservar la imagen anterior, actualizar
+el código al commit aprobado y construir/recrear exclusivamente `backend` con
+`--no-deps`. Verificar salud y envío SMTP controlado antes de darlo por concluido.
+
+Las pruebas automatizadas usan H2 y SMTP simulado, sin mensajes reales ni datos
+productivos. La entrega SMTP real queda pendiente de una prueba controlada autorizada.
+
+## Resultado de pruebas
+
+`./mvnw test`: 100 pruebas, cero fallos, cero errores y cero omitidas.
+Incluye los cinco eventos con y sin coincidencia del destinatario principal con HR,
+configuración/valor vacío, controles de doble aprobación, carga/descarga y acceso a
+soportes, rollback conjunto, decisiones concurrentes y fallas/reintentos de ambos
+buzones. `git diff --check` pasó.
