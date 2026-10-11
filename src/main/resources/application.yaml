@@ -53,3 +53,7 @@ logging:
     com.backendintranet: DEBUG
     org.hibernate.SQL: DEBUG
     org.springframework.security: DEBUG
+
+absence:
+  mail:
+    hr-recipient: ${ABSENCE_MAIL_HR_RECIPIENT:talentohumano@licodistribuciones.com}
