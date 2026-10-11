@@ -101,7 +101,7 @@ class AbsenceSecurityIntegrationTest {
                 .andExpect(jsonPath("$.requesterId").value(employee.getId()))
                 .andExpect(jsonPath("$.approverId").value(approver.getId()));
         assertThat(requests.findByRequester_IdOrderByCreatedAtDesc(employee.getId())).hasSize(1);
-        assertThat(mail.findAll()).hasSize(1);
+        assertThat(mail.findAll()).hasSize(2);
         assertThat(mail.findAll().getFirst().getSentAt()).isNull();
     }
 
@@ -130,7 +130,7 @@ class AbsenceSecurityIntegrationTest {
                 .andExpect(status().isForbidden());
         assertThat(requests.findById(id).orElseThrow().getStatus())
                 .isEqualTo(AbsenceStatus.PENDING);
-        assertThat(mail.count()).isEqualTo(1);
+        assertThat(mail.count()).isEqualTo(2);
     }
 
     @Test
@@ -150,7 +150,7 @@ class AbsenceSecurityIntegrationTest {
                                 .contentType("application/json")
                                 .content("{}"))
                 .andExpect(status().isConflict());
-        assertThat(mail.count()).isEqualTo(2);
+        assertThat(mail.count()).isEqualTo(4);
         assertThat(mail.findAll()).anyMatch(m -> m.getRecipient().equals(employee.getEmail()));
     }
 

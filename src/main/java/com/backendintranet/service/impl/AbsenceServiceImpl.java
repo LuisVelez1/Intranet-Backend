@@ -11,6 +11,7 @@ import jakarta.validation.Validator;
 
 import lombok.RequiredArgsConstructor;
 
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.authentication.AnonymousAuthenticationToken;
 import org.springframework.security.core.context.SecurityContextHolder;
@@ -29,6 +30,9 @@ public class AbsenceServiceImpl implements AbsenceService {
     private final UserRepository users;
     private final AbsenceMailRepository mail;
     private final Validator validator;
+
+    @Value("${absence.mail.hr-recipient:talentohumano@licodistribuciones.com}")
+    private String hrRecipient = "talentohumano@licodistribuciones.com";
 
     private User currentUser() {
         var authentication = SecurityContextHolder.getContext().getAuthentication();
@@ -154,6 +158,15 @@ public class AbsenceServiceImpl implements AbsenceService {
                         + r.getEndDate()
                         + "\nConsulte los detalles en la intranet.");
         mail.save(message);
+        String hrEmail = hrRecipient == null || hrRecipient.isBlank()
+                ? "talentohumano@licodistribuciones.com" : hrRecipient.trim();
+        if (!recipient.getEmail().trim().equalsIgnoreCase(hrEmail)) {
+            AbsenceMail copy = new AbsenceMail();
+            copy.setRecipient(hrEmail);
+            copy.setSubject(message.getSubject());
+            copy.setBody(message.getBody());
+            mail.save(copy);
+        }
     }
 
     private String name(User u) {

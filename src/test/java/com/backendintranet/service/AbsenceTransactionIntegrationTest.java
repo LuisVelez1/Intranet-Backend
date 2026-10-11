@@ -10,6 +10,9 @@ import com.backendintranet.repository.*;
 import com.backendintranet.service.impl.AbsenceMailDispatcher;
 
 import org.junit.jupiter.api.*;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
+import org.springframework.mail.MailSendException;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.mail.SimpleMailMessage;
@@ -21,6 +24,7 @@ import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.util.*;
 import java.util.concurrent.*;
 
@@ -108,7 +112,7 @@ class AbsenceTransactionIntegrationTest {
                 status -> {
                     service.create(input());
                     assertThat(requests.count()).isEqualTo(1);
-                    assertThat(mail.count()).isEqualTo(1);
+                    assertThat(mail.count()).isEqualTo(2);
                     status.setRollbackOnly();
                 });
         assertThat(requests.count()).isZero();
@@ -123,8 +127,46 @@ class AbsenceTransactionIntegrationTest {
         verifyNoInteractions(sender);
         dispatcher.dispatch();
         dispatcher.dispatch();
-        verify(sender, times(1)).send(any(SimpleMailMessage.class));
+        verify(sender, times(2)).send(any(SimpleMailMessage.class));
         assertThat(mail.findAll().getFirst().getSentAt()).isNotNull();
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void recipientsAreDeliveredAndRetriedIndependently(boolean primaryFails) {
+        service.create(input());
+        String failedRecipient = primaryFails
+                ? approver.getEmail() : "talentohumano@licodistribuciones.com";
+        doAnswer(invocation -> {
+            SimpleMailMessage message = invocation.getArgument(0);
+            if (message.getTo()[0].equals(failedRecipient)) {
+                throw new MailSendException("Sensitive SMTP details");
+            }
+            return null;
+        }).when(sender).send(any(SimpleMailMessage.class));
+        dispatcher.dispatch();
+        var items = mail.findAll();
+        var failed = items.stream().filter(m -> m.getRecipient().equals(failedRecipient)).findFirst().orElseThrow();
+        var delivered = items.stream().filter(m -> !m.getRecipient().equals(failedRecipient)).findFirst().orElseThrow();
+        assertThat(failed.getSentAt()).isNull();
+        assertThat(failed.getAttempts()).isEqualTo(1);
+        assertThat(failed.getLastError()).isEqualTo("MailSendException");
+        assertThat(failed.getNextAttemptAt()).isAfter(LocalDateTime.now());
+        assertThat(delivered.getSentAt()).isNotNull();
+        assertThat(delivered.getAttempts()).isEqualTo(1);
+        dispatcher.dispatch();
+        verify(sender, times(2)).send(any(SimpleMailMessage.class));
+        failed.setNextAttemptAt(LocalDateTime.now().minusSeconds(1));
+        mail.saveAndFlush(failed);
+        doNothing().when(sender).send(any(SimpleMailMessage.class));
+        dispatcher.dispatch();
+        dispatcher.dispatch();
+        verify(sender, times(3)).send(any(SimpleMailMessage.class));
+        var retried = mail.findById(failed.getId()).orElseThrow();
+        assertThat(retried.getSentAt()).isNotNull();
+        assertThat(retried.getAttempts()).isEqualTo(2);
+        assertThat(retried.getLastError()).isNull();
+        assertThat(mail.findById(delivered.getId()).orElseThrow().getAttempts()).isEqualTo(1);
     }
 
     @Test
@@ -155,7 +197,7 @@ class AbsenceTransactionIntegrationTest {
             assertThat(List.of(first.get(15, TimeUnit.SECONDS), second.get(15, TimeUnit.SECONDS)))
                     .containsExactlyInAnyOrder("approved", "conflict");
         }
-        assertThat(mail.count()).isEqualTo(2);
+        assertThat(mail.count()).isEqualTo(4);
         assertThat(requests.findById(id).orElseThrow().getStatus())
                 .isEqualTo(AbsenceStatus.APPROVED);
     }

@@ -114,11 +114,12 @@ class AbsenceServiceImplTest {
         assertThat(response.getStatus()).isEqualTo(AbsenceStatus.PENDING);
         assertThat(response.getSupportFile()).isNull();
         var captor = ArgumentCaptor.forClass(AbsenceMail.class);
-        verify(mail).save(captor.capture());
-        assertThat(captor.getValue().getRecipient()).isEqualTo("approver@example.test");
-        assertThat(captor.getValue().getBody())
+        verify(mail, times(2)).save(captor.capture());
+        assertThat(captor.getAllValues().getFirst().getRecipient()).isEqualTo("approver@example.test");
+        assertThat(captor.getAllValues().getFirst().getBody())
                 .contains("new-request")
                 .doesNotContain("Personal appointment");
+        assertCopies("approver@example.test");
     }
 
     @Test
@@ -237,6 +238,7 @@ class AbsenceServiceImplTest {
         assertThat(result.getStatus()).isEqualTo(AbsenceStatus.APPROVED);
         assertThat(result.getApprovedAt()).isNotNull();
         assertThat(result.getApprovalComment()).isEqualTo("Approved");
+        assertCopies("employee@example.test");
         verify(mail)
                 .save(
                         argThat(
@@ -253,7 +255,52 @@ class AbsenceServiceImplTest {
         var result = service.reject("request", new AbsenceDecisionRequest());
         assertThat(result.getStatus()).isEqualTo(AbsenceStatus.REJECTED);
         assertThat(result.getApprovedAt()).isNull();
-        verify(mail).save(argThat(m -> m.getBody().contains("rechazada")));
+        verify(mail, times(2)).save(argThat(m -> m.getBody().contains("rechazada")));
+        assertCopies("employee@example.test");
+    }
+
+    private void assertCopies(String primary) {
+        var captor = ArgumentCaptor.forClass(AbsenceMail.class);
+        verify(mail, times(2)).save(captor.capture());
+        var messages = captor.getAllValues();
+        assertThat(messages).extracting(AbsenceMail::getRecipient)
+                .containsExactly(primary, "talentohumano@licodistribuciones.com");
+        assertThat(messages.get(1)).isNotSameAs(messages.get(0));
+        assertThat(messages.get(1).getSubject()).isEqualTo(messages.get(0).getSubject());
+        assertThat(messages.get(1).getBody()).isEqualTo(messages.get(0).getBody());
+    }
+
+    @Test
+    void creationDoesNotDuplicateHrRecipientIgnoringCaseAndSpaces() {
+        login(employee);
+        approver.setEmail(" TALENTOHUMANO@LICODISTRIBUCIONES.COM ");
+        assign();
+        save();
+        service.create(input());
+        verify(mail).save(any());
+    }
+
+    @ParameterizedTest
+    @EnumSource(value = AbsenceStatus.class, names = {"APPROVED", "REJECTED"})
+    void decisionDoesNotDuplicateHrRecipient(AbsenceStatus decision) {
+        login(approver);
+        employee.setEmail(" TALENTOHUMANO@LICODISTRIBUCIONES.COM ");
+        when(requests.findForDecision("request")).thenReturn(Optional.of(pending()));
+        save();
+        if (decision == AbsenceStatus.APPROVED) service.approve("request", new AbsenceDecisionRequest());
+        else service.reject("request", new AbsenceDecisionRequest());
+        verify(mail).save(any());
+    }
+
+    @Test
+    void configuredHrRecipientReceivesIdenticalCopy() {
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "hrRecipient", " custom-hr@example.test ");
+        login(employee);
+        assign();
+        save();
+        service.create(input());
+        verify(mail).save(argThat(m -> m.getRecipient().equals("custom-hr@example.test")));
+        verify(mail, times(2)).save(any());
     }
 
     @Test
